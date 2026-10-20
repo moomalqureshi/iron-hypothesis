@@ -1,0 +1,138 @@
+{{- $img := .Values.image }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate-{{ .Release.Revision }}
+spec:
+  backoffLimit: 4
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        {{- include "ironman.waitForDb" . | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ $img.app }}
+          imagePullPolicy: {{ $img.pullPolicy }}
+          command: [python, -m, ironman.migrate]
+          env:
+            {{- include "ironman.env" . | nindent 12 }}
+            - name: IRONMAN_PUBLIC_ROLE_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .Values.secretName }}, key: POSTGRES_PUBLIC_PASSWORD}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: private-api}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: private-api}}
+  template:
+    metadata: {labels: {app: private-api, tier: private}}
+    spec:
+      initContainers:
+        {{- include "ironman.waitForDb" . | nindent 8 }}
+      containers:
+        - name: api
+          image: {{ $img.app }}
+          imagePullPolicy: {{ $img.pullPolicy }}
+          command: [uvicorn, ironman.api:app, --host, 0.0.0.0, --port, "8000"]
+          ports: [{containerPort: 8000}]
+          env: {{- include "ironman.env" . | nindent 12 }}
+          readinessProbe: {httpGet: {path: /healthz, port: 8000}, periodSeconds: 10}
+          resources: {{ toJson .Values.app.resources }}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: private-api}
+spec:
+  selector: {app: private-api}
+  ports: [{port: 8000}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: public-api}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: public-api}}
+  template:
+    metadata: {labels: {app: public-api, tier: public}}
+    spec:
+      containers:
+        - name: api
+          image: {{ $img.app }}
+          imagePullPolicy: {{ $img.pullPolicy }}
+          command: [uvicorn, ironman.public_api:app, --host, 0.0.0.0, --port, "8001"]
+          ports: [{containerPort: 8001}]
+          env:
+            # The public API gets only the public role's credentials, never the owner database URL.
+            - name: POSTGRES_PUBLIC_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .Values.secretName }}, key: POSTGRES_PUBLIC_PASSWORD}}
+            - name: IRONMAN_PUBLIC_DATABASE_URL
+              value: postgresql://ironman_public:$(POSTGRES_PUBLIC_PASSWORD)@postgres:5432/ironman
+            - {name: IRONMAN_REDIS_URL, value: "redis://redis:6379/0"}
+          readinessProbe: {httpGet: {path: /healthz, port: 8001}, periodSeconds: 10}
+          resources: {{ toJson .Values.app.resources }}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: public-api}
+spec:
+  selector: {app: public-api}
+  ports: [{port: 8001}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: sync-worker}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: sync-worker}}
+  template:
+    metadata: {labels: {app: sync-worker, tier: private}}
+    spec:
+      initContainers:
+        {{- include "ironman.waitForDb" . | nindent 8 }}
+      containers:
+        - name: worker
+          image: {{ $img.app }}
+          imagePullPolicy: {{ $img.pullPolicy }}
+          command: [rq, worker, ingest, --url, "redis://redis:6379/0"]
+          env: {{- include "ironman.env" . | nindent 12 }}
+          resources: {{ toJson .Values.app.resources }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: web}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: web}}
+  template:
+    metadata: {labels: {app: web}}
+    spec:
+      containers:
+        - name: web
+          image: {{ $img.web }}
+          imagePullPolicy: {{ $img.pullPolicy }}
+          ports: [{containerPort: 80}]
+          resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {memory: 64Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: web}
+spec:
+  selector: {app: web}
+  ports: [{port: 80}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: {name: ironman}
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: {{ .Values.host }}
+      http:
+        paths:
+          - {path: /public/api, pathType: Prefix, backend: {service: {name: public-api, port: {number: 8001}}}}
+          - {path: /api, pathType: Prefix, backend: {service: {name: private-api, port: {number: 8000}}}}
+          - {path: /healthz, pathType: Exact, backend: {service: {name: private-api, port: {number: 8000}}}}
+          - {path: /, pathType: Prefix, backend: {service: {name: web, port: {number: 80}}}}

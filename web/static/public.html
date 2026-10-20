@@ -1,0 +1,26 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ironman training - public dashboard</title><link rel="stylesheet" href="style.css"></head><body>
+<div id="banner"></div>
+<header><h1>Ironman training progress</h1><a href="/public.html">Live (anonymised)</a><a href="/public.html?demo=1">Demo</a><a href="/">Owner login</a></header>
+<main id="main"><p class="muted">Loading...</p></main>
+<script src="common.js"></script><script>
+(async () => {
+  const demo = new URLSearchParams(location.search).has('demo');
+  try {
+    const d = await api(demo ? '/public/api/demo' : '/public/api/dashboard');
+    if (d.demo) $('#banner').innerHTML = '<div class="banner">DEMO: synthetic data, not a real athlete</div>';
+    const g = d.goal, last = d.fitness.at(-1);
+    $('#main').innerHTML = `
+      <div class="grid">
+        <div class="card"><h2>Fitness (CTL)</h2><div class="stat">${last ? last.ctl.toFixed(0) : '-'}</div><div class="muted">form (TSB) ${last ? last.tsb.toFixed(0) : '-'}</div></div>
+        <div class="card"><h2>Race goal</h2>${g ? `<div class="stat">${g.percent_of_target ?? '-'}%</div><div class="muted">of target fitness, ${g.weeks_remaining} weeks to go</div>` : '<div class="muted">No goal set</div>'}</div>
+        <div class="card"><h2>Percentiles</h2>${(d.percentiles || []).map(p => `<div>${esc(p.metric.replace('_', ' '))}: <b>${p.percentile}</b>th <span class="muted">(${esc(p.source)})</span></div>`).join('') || '<div class="muted">n/a</div>'}</div>
+      </div>
+      <div class="card"><h2>Fitness, fatigue, form</h2>${lineChart([
+        {name: 'CTL fitness', points: d.fitness.map(r => [new Date(r.day), r.ctl])},
+        {name: 'ATL fatigue', points: d.fitness.map(r => [new Date(r.day), r.atl])}])}</div>
+      <div class="card"><h2>Weekly volume (hours)</h2>${volumeChart(d.volume)}</div>
+      <p class="muted">${DISCLAIMER} ${d.refreshed_at ? 'Data refreshed ' + esc(d.refreshed_at) : ''}</p>`;
+  } catch (e) { $('#main').innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+})();
+</script></body></html>

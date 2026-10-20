@@ -1,0 +1,33 @@
+image:
+  app: ironman:local
+  web: ironman-web:local
+  pullPolicy: IfNotPresent
+
+# Name of a pre-created Secret holding credentials (see scripts/local-up.sh).
+secretName: ironman-secrets
+
+host: localhost
+
+postgres:
+  image: timescale/timescaledb:latest-pg16
+  storage: 5Gi
+  resources: {requests: {cpu: 100m, memory: 256Mi}, limits: {memory: 768Mi}}
+
+redis:
+  image: redis:7-alpine
+  storage: 1Gi
+  resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {memory: 256Mi}}
+
+app:
+  resources: {requests: {cpu: 50m, memory: 128Mi}, limits: {memory: 384Mi}}
+
+env:
+  IRONMAN_WEB_ORIGIN: http://localhost:8080
+  IRONMAN_STRAVA_REDIRECT_URI: http://localhost:8080/api/strava/callback
+  IRONMAN_OWNER_EMAIL: owner@example.com
+
+schedules:
+  sanitize: "*/30 * * * *"
+  stravaSync: "*/30 * * * *"
+  trainModels: "0 3 * * 0"
+  weeklyPlan: "0 6 * * 1"

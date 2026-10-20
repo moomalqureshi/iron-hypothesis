@@ -1,0 +1,23 @@
+{{- $img := .Values.image }}
+{{- range $name, $spec := dict "sanitize" (dict "schedule" .Values.schedules.sanitize "cmd" (list "python" "-m" "ironman.sanitize")) "strava-sync" (dict "schedule" .Values.schedules.stravaSync "cmd" (list "python" "-m" "ironman.jobs" "sync")) }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: {{ $name }}}
+spec:
+  schedule: {{ $spec.schedule | quote }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata: {labels: {tier: private}}
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: job
+              image: {{ $img.app }}
+              imagePullPolicy: {{ $img.pullPolicy }}
+              command: {{ toJson $spec.cmd }}
+              env: {{- include "ironman.env" $ | nindent 16 }}
+{{- end }}

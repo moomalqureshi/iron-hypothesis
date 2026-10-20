@@ -1,0 +1,5 @@
+apiVersion: v2
+name: ironman
+description: Ironman training intelligence platform (local k8s)
+version: 0.1.0
+appVersion: "0.1.0"
